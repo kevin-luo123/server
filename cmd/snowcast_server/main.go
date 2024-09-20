@@ -12,10 +12,12 @@ import (
 var num_to_client map[int]ClientInfo
 var station_to_nums map[uint16]map[int]struct{}
 var next_client_num int
-var client_count_mutex sync.Mutex
-var station_mutex sync.Mutex
 var station_count uint16
 var stations []string
+
+var num_to_client_mutex sync.Mutex
+var station_to_nums_mutex sync.Mutex
+var client_count_mutex sync.Mutex
 
 type ClientInfo struct {
 	connection *net.TCPConn
@@ -56,63 +58,60 @@ func main() {
 func handle_Conn(conn *net.TCPConn) {
 	defer conn.Close()
 
+	//client struct instantiated
 	client := ClientInfo{
 		connection: conn,
 		udp_port:   0,
 		station:    station_count,
 	}
+
+	//setting up client num and mapping from num to struct
 	client_count_mutex.Lock()
 	client_num := next_client_num
-	num_to_client[client_num] = client
 	next_client_num += 1
 	client_count_mutex.Unlock()
+	num_to_client_mutex.Lock()
+	num_to_client[client_num] = client
+	num_to_client_mutex.Unlock()
 
 	for {
 		message := make([]byte, 3)
 		_, err := conn.Read(message)
 		if err != nil || message[0] == 5 {
 			log.Printf("client connection closed")
+			end_connection(client_num)
 			return
 		}
-		if message[0] == 0 { //responding to hello
-			if client.udp_port != 0 {
-				invalid := make([]byte, 20)
-				invalid[0] = 4
-				invalid[1] = 18
-				copy(invalid[2:], "hello already sent")
-				conn.Write(invalid)
-			} else {
+		if message[0] == 0 { //hello
+			if client.udp_port != 0 { //multiple hellos sent
+				invalid_response(1, conn)
+				end_connection(client_num)
+				return
+			} else { //respond with welcome message
 				client.udp_port = binary.BigEndian.Uint16(message[1:])
 				welcome := make([]byte, 3)
 				welcome[0] = 2
-				binary.BigEndian.PutUint16(welcome[1:], station_count) //numStations
+				binary.BigEndian.PutUint16(welcome[1:], station_count)
 				conn.Write(welcome)
 			}
-		} else if message[0] == 1 { //setting station
+		} else if message[0] == 1 { //set station
 			station_number := binary.BigEndian.Uint16(message[1:])
 			if client.udp_port == 0 {
-				invalid := make([]byte, 20)
-				invalid[0] = 4
-				invalid[1] = 18
-				copy(invalid[2:], "hello not sent yet")
-				conn.Write(invalid)
+				invalid_response(2, conn)
+				end_connection(client_num)
+				return
 			} else if station_number < 0 || station_number >= station_count {
-				invalid := make([]byte, 24)
-				invalid[0] = 4
-				invalid[1] = 22
-				copy(invalid[2:], "invalid station number")
-				conn.Write(invalid)
-			} else {
-				station_number := binary.BigEndian.Uint16(message[1:])
-				if client.station == station_count { //first time
-					station_mutex.Lock()
+				invalid_response(3, conn)
+				end_connection(client_num)
+				return
+			} else { //announce the station
+				if station_number != client.station { //setting new station
+					station_to_nums_mutex.Lock()
+					if client.station != station_number { //need to get off old station
+						delete(station_to_nums[client.station], client_num)
+					}
 					station_to_nums[station_number][client_num] = struct{}{}
-					station_mutex.Unlock()
-				} else if client.station != station_number { //change station
-					station_mutex.Lock()
-					station_to_nums[station_number][client_num] = struct{}{}
-					delete(station_to_nums[client.station], client_num)
-					station_mutex.Unlock()
+					station_to_nums_mutex.Unlock()
 				}
 				announce := make([]byte, 2+len(stations[station_number]))
 				announce[0] = 3
@@ -121,12 +120,49 @@ func handle_Conn(conn *net.TCPConn) {
 				client.station = station_number
 				conn.Write(announce)
 			}
-		} else {
-			invalid := make([]byte, 22)
-			invalid[0] = 4
-			invalid[1] = 20
-			copy(invalid[2:], "unknown command sent")
-			conn.Write(invalid)
+		} else { //unknown message
+			invalid_response(4, conn)
+			end_connection(client_num)
+			return
 		}
 	}
+}
+
+func invalid_response(x int, conn *net.TCPConn) {
+	if x == 1 { //multiple hellos
+		invalid := make([]byte, 20)
+		invalid[0] = 4
+		invalid[1] = 18
+		copy(invalid[2:], "hello already sent")
+		conn.Write(invalid)
+	} else if x == 2 { //set station command before sending hello
+		invalid := make([]byte, 20)
+		invalid[0] = 4
+		invalid[1] = 18
+		copy(invalid[2:], "hello not sent yet")
+		conn.Write(invalid)
+	} else if x == 3 { //invalid set station number
+		invalid := make([]byte, 24)
+		invalid[0] = 4
+		invalid[1] = 22
+		copy(invalid[2:], "invalid station number")
+		conn.Write(invalid)
+	} else { //unknown command sent
+		invalid := make([]byte, 22)
+		invalid[0] = 4
+		invalid[1] = 20
+		copy(invalid[2:], "unknown command sent")
+		conn.Write(invalid)
+	}
+}
+
+// remove client from both maps
+func end_connection(client_num int) {
+	station_to_nums_mutex.Lock()
+	delete(station_to_nums[num_to_client[client_num].station], client_num)
+	station_to_nums_mutex.Unlock()
+
+	num_to_client_mutex.Lock()
+	delete(num_to_client, client_num)
+	num_to_client_mutex.Unlock()
 }
