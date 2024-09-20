@@ -25,6 +25,9 @@ type ClientInfo struct {
 	station    uint16
 }
 
+// handle timeouts
+// start streaming music
+// respond to commands
 func main() {
 	if len(os.Args) < 3 {
 		log.Fatalf("Usage: %s <listen port> <file0> [file 1] [file 2] ...", os.Args[0])
@@ -84,7 +87,7 @@ func handle_Conn(conn *net.TCPConn) {
 		}
 		if message[0] == 0 { //hello
 			if client.udp_port != 0 { //multiple hellos sent
-				invalid_response(1, conn)
+				invalid_command(1, conn)
 				end_connection(client_num)
 				return
 			} else { //respond with welcome message
@@ -97,11 +100,11 @@ func handle_Conn(conn *net.TCPConn) {
 		} else if message[0] == 1 { //set station
 			station_number := binary.BigEndian.Uint16(message[1:])
 			if client.udp_port == 0 {
-				invalid_response(2, conn)
+				invalid_command(2, conn)
 				end_connection(client_num)
 				return
-			} else if station_number < 0 || station_number >= station_count {
-				invalid_response(3, conn)
+			} else if station_number > station_count {
+				invalid_command(3, conn)
 				end_connection(client_num)
 				return
 			} else { //announce the station
@@ -121,14 +124,14 @@ func handle_Conn(conn *net.TCPConn) {
 				conn.Write(announce)
 			}
 		} else { //unknown message
-			invalid_response(4, conn)
+			invalid_command(4, conn)
 			end_connection(client_num)
 			return
 		}
 	}
 }
 
-func invalid_response(x int, conn *net.TCPConn) {
+func invalid_command(x int, conn *net.TCPConn) {
 	if x == 1 { //multiple hellos
 		invalid := make([]byte, 20)
 		invalid[0] = 4
