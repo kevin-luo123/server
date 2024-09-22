@@ -55,9 +55,6 @@ func main() {
 	binary.BigEndian.PutUint16(hello[1:], uint16(listenerPort))
 	conn.Write(hello)
 	hello_sent = true
-
-	//wait for user input
-	go wait_for_input()
 }
 
 func wait_for_server() {
@@ -77,6 +74,9 @@ func wait_for_server() {
 			//print prompt for user
 			fmt.Println("Welcome to Snowcast! The server has " + strconv.FormatUint(uint64(num_stations), 10) + " stations")
 			welcome_received = true
+
+			//begin waiting for user input
+			go wait_for_input()
 		} else if message_type[0] == 3 && station_set { //received announce
 			//reading server's announcement
 			server_response := make([]byte, 1)
