@@ -27,27 +27,58 @@ type ClientInfo struct {
 
 // handle timeouts
 // start streaming music
-// respond to commands
+// respond to commands -in progress
 func main() {
 	if len(os.Args) < 3 {
-		log.Fatalf("Usage: %s <listen port> <file0> [file 1] [file 2] ...", os.Args[0])
+		log.Printf("Usage: %s <tcp port> <file0> [file 1] [file 2] ...", os.Args[0])
+		return
 	}
-	//listen on port 16800, files are mp3
+	//process arguments, set up connection
 	stations = os.Args[2:]
 	station_count = uint16(len(stations))
 	port := fmt.Sprintf(":%s", os.Args[1])
 	addr, err := net.ResolveTCPAddr("tcp4", port)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("could nto resolve tcp address")
+		return
 	}
-
 	list, err := net.ListenTCP("tcp4", addr)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("listening failed")
+		return
 	}
-
 	defer list.Close()
+
 	next_client_num = 0
+	go wait_for_connections(list)
+
+	//respond to user input
+	for {
+		var input string
+		fmt.Scanln(&input)
+		if input == "q" { //quit
+			for _, client_info := range num_to_client {
+				message := make([]byte, 1)
+				message[0] = 9 //random number, make client quit
+				client_info.connection.Write(message)
+				client_info.connection.Close()
+			}
+			return
+		} else if input == "p" {
+			station_to_nums_mutex.Lock()
+			for id := 0; id < len(stations); id++ {
+				list := ""
+				for num, _ := range station_to_nums[uint16(id)] {
+					list += ", 127.0.0.1:" + string(num_to_client[num].udp_port)
+				}
+				fmt.Println(string(id) + ", " + stations[id] + list)
+			}
+			station_to_nums_mutex.Unlock()
+		} //handle p <file> and everything else
+	}
+}
+
+func wait_for_connections(list *net.TCPListener) {
 	for {
 		tcp_conn, err := list.AcceptTCP()
 		if err != nil {
