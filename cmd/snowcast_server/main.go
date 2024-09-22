@@ -124,6 +124,7 @@ func stream(file *os.File, song_idx uint16) {
 	buffer := make([]byte, chunk_size)
 	for {
 		//load song data into buffer
+		restart := false
 		start := time.Now()
 		n, err := reader.Read(buffer)
 		if err == io.EOF {
@@ -137,6 +138,7 @@ func stream(file *os.File, song_idx uint16) {
 			if err != nil {
 				log.Println("Station failed to restart: " + stations[song_idx])
 			}
+			restart = true
 		} else if err != nil {
 			log.Println("Station failed to play: " + stations[song_idx])
 		}
@@ -150,6 +152,9 @@ func stream(file *os.File, song_idx uint16) {
 				if err != nil {
 					log.Println("Failed to send data to client number " + string(client_num))
 					return
+				}
+				if restart {
+					announce(song_idx, client_num)
 				}
 			}
 		}
@@ -207,7 +212,7 @@ func handle_Conn(conn *net.TCPConn) {
 				client.udp_port = binary.BigEndian.Uint16(message[1:])
 
 				//set up udp connection
-				udp_addr := fmt.Sprintf("127.0.0.1:%s", client.udp_port)
+				udp_addr := fmt.Sprintf("127.0.0.1:%d", client.udp_port)
 				addr, err := net.ResolveUDPAddr("udp", udp_addr)
 				if err != nil {
 					invalid_command(4, conn)
@@ -240,20 +245,7 @@ func handle_Conn(conn *net.TCPConn) {
 				clean(client_num)
 				return
 			} else { //announce the station
-				if station_number != client.station { //setting new station
-					station_to_nums_mutex.Lock()
-					if client.station != station_number { //need to get off old station
-						delete(station_to_nums[client.station], client_num)
-					}
-					station_to_nums[station_number][client_num] = struct{}{}
-					station_to_nums_mutex.Unlock()
-				}
-				announce := make([]byte, 2+len(stations[station_number]))
-				announce[0] = 3
-				announce[1] = uint8(len(stations[station_number]))
-				copy(announce[2:], stations[station_number])
-				client.station = station_number
-				conn.Write(announce)
+				announce(station_number, client_num)
 			}
 		} else { //unknown message
 			invalid_command(4, conn)
@@ -261,6 +253,26 @@ func handle_Conn(conn *net.TCPConn) {
 			return
 		}
 	}
+}
+
+func announce(station_number uint16, client_num int) {
+	num_to_client_mutex.Lock()
+	client := num_to_client[client_num]
+	num_to_client_mutex.Unlock()
+	if station_number != client.station { //setting new station
+		station_to_nums_mutex.Lock()
+		if client.station != station_number { //need to get off old station
+			delete(station_to_nums[client.station], client_num)
+		}
+		station_to_nums[station_number][client_num] = struct{}{}
+		station_to_nums_mutex.Unlock()
+	}
+	announce := make([]byte, 2+len(stations[station_number]))
+	announce[0] = 3
+	announce[1] = uint8(len(stations[station_number]))
+	copy(announce[2:], stations[station_number])
+	client.station = station_number
+	client.connection.Write(announce)
 }
 
 func invalid_command(x int, conn *net.TCPConn) {
