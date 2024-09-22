@@ -10,6 +10,10 @@ import (
 )
 
 var conn net.TCPConn
+var station_set bool
+var hello_sent bool
+var welcome_received bool
+var num_stations uint16
 
 // handle accepting the annoucne whwen a song restarts
 // error checking for getting welcome before hello
@@ -37,33 +41,74 @@ func main() {
 	}
 	defer conn.Close()
 
+	//set up states
+	station_set = false
+	hello_sent = false
+	welcome_received = false
+
+	//wait for server messages
+	go wait_for_server()
+
 	//start handshake, send hello to server
 	hello := make([]byte, 3)
 	hello[0] = 0
 	binary.BigEndian.PutUint16(hello[1:], uint16(listenerPort))
 	conn.Write(hello)
-	//receive and process welcome
-	welcome := make([]byte, 3)
-	n, err := conn.Read(welcome)
-	if err != nil || n != 3 || welcome[0] != 2 {
-		log.Printf("welcome message failed")
-		end_connection()
-		return
-	}
-	num_stations := binary.BigEndian.Uint16(welcome[1:])
-
-	//print prompt for user
-	fmt.Println("Welcome to Snowcast! The server has " + strconv.FormatUint(uint64(num_stations), 10) + " stations")
+	hello_sent = true
 
 	//wait for user input
+	go wait_for_input()
+}
+
+func wait_for_server() {
+	for {
+		message_type := make([]byte, 1)
+		_, err := conn.Read(message_type)
+		if err != nil {
+			log.Fatal(err)
+		} else if message_type[0] == 2 && hello_sent && !welcome_received { //received welcome
+			welcome := make([]byte, 2)
+			n, err := conn.Read(welcome)
+			if err != nil || n != 2 {
+				end_connection()
+				log.Fatal("corrupted welcome")
+			}
+			num_stations = binary.BigEndian.Uint16(welcome)
+			//print prompt for user
+			fmt.Println("Welcome to Snowcast! The server has " + strconv.FormatUint(uint64(num_stations), 10) + " stations")
+			welcome_received = true
+		} else if message_type[0] == 3 && station_set { //received announce
+			//reading server's announcement
+			server_response := make([]byte, 1)
+			n, err := conn.Read(server_response)
+			if err != nil || n != 1 {
+				end_connection()
+				log.Fatal("corrupted announcement (song name length)")
+			}
+			//responding to valid announcement
+			song_name_size := server_response[0]
+			song_name := make([]byte, song_name_size)
+			n, err = conn.Read(song_name)
+			if n != int(song_name_size) || err != nil {
+				end_connection()
+				log.Fatal("corrupted announcement (song name)")
+			}
+			log.Printf("New song announced: " + string(song_name))
+		} else { //received invalid or unknown message, disconnect in both case
+			end_connection()
+			log.Fatal("invalid use of protocol")
+		}
+	}
+}
+
+func wait_for_input() {
 	for {
 		var input string
 		fmt.Scanln(&input) //user input read
 
 		if input == "q" { //user quits
 			end_connection()
-			log.Printf("closing connection")
-			return
+			log.Fatal("closing connection")
 		}
 		station, err := strconv.Atoi(input)
 		if err != nil || station < 0 || station >= int(num_stations) { //user entered a non-number of an invalid number
@@ -74,26 +119,7 @@ func main() {
 			set_station[0] = 1
 			binary.BigEndian.PutUint16(set_station[1:], uint16(station))
 			conn.Write(set_station)
-
-			//reading server's announcement
-			server_response := make([]byte, 2)
-			n, err = conn.Read(server_response)
-			if err != nil || server_response[0] != 3 || n != 2 { //if we get anything other than an announcement the conn ends
-				end_connection()
-				log.Printf("announcement not received")
-				return
-			}
-
-			//responding to valid announcement
-			song_name_size := server_response[1]
-			song_name := make([]byte, song_name_size)
-			n, err = conn.Read(song_name)
-			if n != int(song_name_size) || err != nil {
-				end_connection()
-				log.Printf("corrupted announcement")
-				return
-			}
-			log.Printf("New song announced: " + string(song_name))
+			station_set = true
 		}
 	}
 }

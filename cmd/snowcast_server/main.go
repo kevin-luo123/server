@@ -80,15 +80,15 @@ func handle_Conn(conn *net.TCPConn) {
 	for {
 		message := make([]byte, 3)
 		_, err := conn.Read(message)
-		if err != nil || message[0] == 5 {
+		if err != nil || message[0] == 5 { //read failed or client tells server it's quitting
 			log.Printf("client connection closed")
-			end_connection(client_num)
+			clean(client_num)
 			return
 		}
 		if message[0] == 0 { //hello
 			if client.udp_port != 0 { //multiple hellos sent
 				invalid_command(1, conn)
-				end_connection(client_num)
+				clean(client_num)
 				return
 			} else { //respond with welcome message
 				client.udp_port = binary.BigEndian.Uint16(message[1:])
@@ -101,11 +101,11 @@ func handle_Conn(conn *net.TCPConn) {
 			station_number := binary.BigEndian.Uint16(message[1:])
 			if client.udp_port == 0 {
 				invalid_command(2, conn)
-				end_connection(client_num)
+				clean(client_num)
 				return
 			} else if station_number > station_count {
 				invalid_command(3, conn)
-				end_connection(client_num)
+				clean(client_num)
 				return
 			} else { //announce the station
 				if station_number != client.station { //setting new station
@@ -125,7 +125,7 @@ func handle_Conn(conn *net.TCPConn) {
 			}
 		} else { //unknown message
 			invalid_command(4, conn)
-			end_connection(client_num)
+			clean(client_num)
 			return
 		}
 	}
@@ -160,7 +160,7 @@ func invalid_command(x int, conn *net.TCPConn) {
 }
 
 // remove client from both maps
-func end_connection(client_num int) {
+func clean(client_num int) {
 	station_to_nums_mutex.Lock()
 	delete(station_to_nums[num_to_client[client_num].station], client_num)
 	station_to_nums_mutex.Unlock()
