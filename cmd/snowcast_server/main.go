@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
 	"regexp"
 	"sync"
+	"time"
 )
 
 var num_to_client map[int]ClientInfo
@@ -20,14 +23,16 @@ var num_to_client_mutex sync.Mutex
 var station_to_nums_mutex sync.Mutex
 var client_count_mutex sync.Mutex
 
+const chunk_size = 160 //160 bytes, sent 100 times a second, 16 kB/s
+
 type ClientInfo struct {
-	connection *net.TCPConn
-	udp_port   uint16
-	station    uint16
+	connection     *net.TCPConn
+	udp_connection *net.UDPConn
+	udp_port       uint16
+	station        uint16
 }
 
 // handle timeouts
-// start streaming music
 func main() {
 	if len(os.Args) < 3 {
 		log.Printf("Usage: %s <tcp port> <file0> [file 1] [file 2] ...", os.Args[0])
@@ -51,6 +56,17 @@ func main() {
 
 	next_client_num = 0
 	go wait_for_connections(list)
+
+	//start streaming music
+	for idx := range stations {
+		file, err := os.Open(stations[idx])
+		if err != nil {
+			log.Printf("invalid file: " + stations[idx])
+			return
+		}
+		go stream(file, uint16(idx))
+		defer file.Close()
+	}
 
 	//respond to user input
 	for {
@@ -103,6 +119,46 @@ func main() {
 	}
 }
 
+func stream(file *os.File, song_idx uint16) {
+	reader := bufio.NewReader(file)
+	buffer := make([]byte, chunk_size)
+	for {
+		//load song data into buffer
+		start := time.Now()
+		n, err := reader.Read(buffer)
+		if err == io.EOF {
+			_, err = file.Seek(0, io.SeekStart)
+			if err != nil {
+				log.Println("Station failed to loop: " + stations[song_idx])
+				return
+			}
+			reader = bufio.NewReader(file)
+			_, err = reader.Read(buffer[n:])
+			if err != nil {
+				log.Println("Station failed to restart: " + stations[song_idx])
+			}
+		} else if err != nil {
+			log.Println("Station failed to play: " + stations[song_idx])
+		}
+
+		//play to all clients listening to station
+		station_to_nums_mutex.Lock()
+		if clients, exists := station_to_nums[song_idx]; exists {
+			for client_num, _ := range clients {
+				//no mutex needed because we are reading something that is never changed
+				_, err = num_to_client[client_num].udp_connection.Write(buffer)
+				if err != nil {
+					log.Println("Failed to send data to client number " + string(client_num))
+					return
+				}
+			}
+		}
+		station_to_nums_mutex.Unlock()
+		stop := time.Now()
+		time.Sleep(10*time.Millisecond - stop.Sub(start))
+	}
+}
+
 func wait_for_connections(list *net.TCPListener) {
 	for {
 		tcp_conn, err := list.AcceptTCP()
@@ -119,9 +175,10 @@ func handle_Conn(conn *net.TCPConn) {
 
 	//client struct instantiated
 	client := ClientInfo{
-		connection: conn,
-		udp_port:   0,
-		station:    station_count,
+		connection:     conn,
+		udp_port:       0,
+		station:        station_count,
+		udp_connection: nil,
 	}
 
 	//setting up client num and mapping from num to struct
@@ -148,6 +205,25 @@ func handle_Conn(conn *net.TCPConn) {
 				return
 			} else { //respond with welcome message
 				client.udp_port = binary.BigEndian.Uint16(message[1:])
+
+				//set up udp connection
+				udp_addr := fmt.Sprintf("127.0.0.1:%s", client.udp_port)
+				addr, err := net.ResolveUDPAddr("udp", udp_addr)
+				if err != nil {
+					invalid_command(4, conn)
+					clean(client_num)
+					return
+				}
+				udp_conn, err := net.DialUDP("udp", nil, addr)
+				if err != nil {
+					invalid_command(4, conn)
+					clean(client_num)
+					return
+				}
+				defer udp_conn.Close()
+				client.udp_connection = udp_conn
+
+				//send welcome message
 				welcome := make([]byte, 3)
 				welcome[0] = 2
 				binary.BigEndian.PutUint16(welcome[1:], station_count)
@@ -206,6 +282,11 @@ func invalid_command(x int, conn *net.TCPConn) {
 		invalid[1] = 22
 		copy(invalid[2:], "invalid station number")
 		conn.Write(invalid)
+	} else if x == 4 {
+		invalid := make([]byte, 12)
+		invalid[0] = 4
+		invalid[1] = 10
+		copy(invalid[2:], "udp failed")
 	} else { //unknown command sent
 		invalid := make([]byte, 22)
 		invalid[0] = 4
