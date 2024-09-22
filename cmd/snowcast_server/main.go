@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"regexp"
 	"sync"
 )
 
@@ -27,7 +28,6 @@ type ClientInfo struct {
 
 // handle timeouts
 // start streaming music
-// respond to commands -in progress
 func main() {
 	if len(os.Args) < 3 {
 		log.Printf("Usage: %s <tcp port> <file0> [file 1] [file 2] ...", os.Args[0])
@@ -56,6 +56,8 @@ func main() {
 	for {
 		var input string
 		fmt.Scanln(&input)
+		re := regexp.MustCompile(`^p\s+(.+)$`)
+		matches := re.FindStringSubmatch(input)
 		if input == "q" { //quit
 			for _, client_info := range num_to_client {
 				message := make([]byte, 1)
@@ -69,12 +71,35 @@ func main() {
 			for id := 0; id < len(stations); id++ {
 				list := ""
 				for num, _ := range station_to_nums[uint16(id)] {
-					list += ", 127.0.0.1:" + string(num_to_client[num].udp_port)
+					list += ",127.0.0.1:" + string(num_to_client[num].udp_port)
 				}
-				fmt.Println(string(id) + ", " + stations[id] + list)
+				fmt.Println(string(id) + "," + stations[id] + list)
 			}
 			station_to_nums_mutex.Unlock()
-		} //handle p <file> and everything else
+		} else if len(matches) > 1 { //write station info to file
+			file, err := os.Create(matches[1])
+			if err != nil {
+				log.Printf("invalid file")
+			} else {
+				defer file.Close()
+				content := ""
+				station_to_nums_mutex.Lock()
+				for id := 0; id < len(stations); id++ {
+					list := ""
+					for num, _ := range station_to_nums[uint16(id)] {
+						list += ",127.0.0.1:" + string(num_to_client[num].udp_port)
+					}
+					content += (string(id) + "," + stations[id] + list + "\n")
+				}
+				station_to_nums_mutex.Unlock()
+				_, err = file.WriteString(content)
+				if err != nil {
+					log.Printf("could not copy to file")
+				}
+			}
+		} else {
+			log.Printf("invalid command")
+		}
 	}
 }
 
