@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -88,9 +89,9 @@ func main() {
 			for id := 0; id < len(stations); id++ {
 				list := ""
 				for num, _ := range station_to_nums[uint16(id)] {
-					list += ",127.0.0.1:" + string(num_to_client[num].udp_port)
+					list += ",127.0.0.1:" + fmt.Sprintf("%d", num_to_client[num].udp_port)
 				}
-				fmt.Println(string(id) + "," + stations[id] + list)
+				fmt.Println(strconv.Itoa(id) + "," + stations[id] + list)
 			}
 			station_to_nums_mutex.Unlock()
 		} else if len(matches) > 1 { //write station info to file
@@ -104,9 +105,9 @@ func main() {
 				for id := 0; id < len(stations); id++ {
 					list := ""
 					for num, _ := range station_to_nums[uint16(id)] {
-						list += ",127.0.0.1:" + string(num_to_client[num].udp_port)
+						list += ",127.0.0.1:" + fmt.Sprintf("%d", num_to_client[num].udp_port)
 					}
-					content += (string(id) + "," + stations[id] + list + "\n")
+					content += (strconv.Itoa(id) + "," + stations[id] + list + "\n")
 				}
 				station_to_nums_mutex.Unlock()
 				_, err = file.WriteString(content)
@@ -153,7 +154,7 @@ func stream(file *os.File, song_idx uint16) {
 				//no mutex needed because we are reading something that is never changed
 				_, err = num_to_client[client_num].udp_connection.Write(buffer)
 				if err != nil {
-					log.Println("Failed to send data to client number " + string(client_num))
+					log.Println("Failed to send data to client number " + strconv.Itoa(client_num))
 					return
 				}
 				if restart {

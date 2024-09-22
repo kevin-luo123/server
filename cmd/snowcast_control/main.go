@@ -70,7 +70,7 @@ func wait_for_server() {
 			num_stations = binary.BigEndian.Uint16(welcome)
 
 			//print prompt for user, wait for input
-			fmt.Println("Welcome to Snowcast! The server has " + string(num_stations) + " stations")
+			fmt.Println("Welcome to Snowcast! The server has " + fmt.Sprintf("%d", num_stations) + " stations")
 			welcome_received = true
 			go wait_for_input()
 		} else if message_type[0] == 3 && station_set { //received announce
@@ -90,7 +90,7 @@ func wait_for_server() {
 				end_connection()
 				log.Fatal("corrupted announcement (song name)")
 			}
-			fmt.Printf("New song announced: " + string(song_name))
+			fmt.Printf("New song announced: " + fmt.Sprintf("%d", song_name))
 		} else { //received invalid or unknown message, disconnect in both case
 			end_connection()
 			log.Fatal("invalid use of protocol")
@@ -108,7 +108,7 @@ func wait_for_input() {
 		}
 		station, err := strconv.Atoi(input)
 		if err != nil || station < 0 || station >= int(num_stations) { //user entered a non-number of an invalid number
-			fmt.Printf("To quit, enter q. To set station, enter a number from 0 - " + string(int(num_stations)-1))
+			fmt.Printf("To quit, enter q. To set station, enter a number from 0 - " + fmt.Sprintf("%d", int(num_stations)-1))
 		} else { //user entered a valid station
 			//sending set station message to server
 			set_station := make([]byte, 3)
