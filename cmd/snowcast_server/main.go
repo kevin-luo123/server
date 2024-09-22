@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -137,10 +138,12 @@ func stream(file *os.File, song_idx uint16) {
 			_, err = reader.Read(buffer[n:])
 			if err != nil {
 				log.Println("Station failed to restart: " + stations[song_idx])
+				return
 			}
 			restart = true
 		} else if err != nil {
 			log.Println("Station failed to play: " + stations[song_idx])
+			return
 		}
 
 		//play to all clients listening to station
@@ -212,7 +215,9 @@ func handle_Conn(conn *net.TCPConn) {
 				client.udp_port = binary.BigEndian.Uint16(message[1:])
 
 				//set up udp connection
-				udp_addr := fmt.Sprintf("127.0.0.1:%d", client.udp_port)
+				remote_addr := conn.RemoteAddr().String()
+				ip := strings.Split(remote_addr, ":")[0]
+				udp_addr := fmt.Sprintf("%s:%d", ip, client.udp_port)
 				addr, err := net.ResolveUDPAddr("udp", udp_addr)
 				if err != nil {
 					invalid_command(4, conn)
