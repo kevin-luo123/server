@@ -210,34 +210,36 @@ func handle_Conn(conn *net.TCPConn) {
 	num_to_client_mutex.Unlock()
 
 	for {
-		part1 := make([]byte, 1)
-		part2 := make([]byte, 2)
-		_, err := conn.Read(part1)
-		message_type := part1[0]
-		if err != nil || message_type == 5 { //read failed or client tells server it's quitting
-			log.Println("client connection closed")
-			clean(client_num)
-			return
+		message := make([]byte, 3)
+		bytes_read := 0
+
+		//read the message
+		for bytes_read != 3 {
+			n, err := conn.Read(message[bytes_read:])
+			if err != nil || message[0] == 5 {
+				log.Println("client connection closed")
+				clean(client_num)
+				return
+			}
+			deadline = time.Now().Add(100 * time.Millisecond)
+			err = conn.SetDeadline(deadline)
+			if err != nil {
+				log.Println("could not set deadline")
+				clean(client_num)
+				return
+			}
+			bytes_read += n
 		}
-		deadline = time.Now().Add(100 * time.Millisecond)
-		err = conn.SetReadDeadline(deadline)
-		if err != nil || quitting {
-			clean(client_num)
-			return
-		}
-		if message_type == 0 { //hello
+		conn.SetDeadline(time.Time{})
+
+		//handle the message
+		if message[0] == 0 { //hello
 			if client.udp_port != 0 { //multiple hellos sent
 				invalid_command(1, conn)
 				clean(client_num)
 				return
 			}
-			n, err := conn.Read(part2)
-			if err != nil || n != 2 {
-				log.Println("hello failed")
-				clean(client_num)
-				return
-			}
-			client.udp_port = binary.BigEndian.Uint16(part2)
+			client.udp_port = binary.BigEndian.Uint16(message[1:])
 			//set up udp connection
 			remote_addr := conn.RemoteAddr().String()
 			ip := strings.Split(remote_addr, ":")[0]
@@ -262,14 +264,8 @@ func handle_Conn(conn *net.TCPConn) {
 			welcome[0] = 2
 			binary.BigEndian.PutUint16(welcome[1:], station_count)
 			conn.Write(welcome)
-		} else if message_type == 1 { //set station
-			n, err := conn.Read(part2)
-			if err != nil || n != 2 {
-				log.Println("set station failed")
-				clean(client_num)
-				return
-			}
-			station_number := binary.BigEndian.Uint16(part2)
+		} else if message[0] == 1 { //set station
+			station_number := binary.BigEndian.Uint16(message[1:])
 			if client.udp_port == 0 || client.udp_connection == nil {
 				invalid_command(2, conn)
 				clean(client_num)

@@ -49,33 +49,31 @@ func main() {
 	hello[0] = 0
 	binary.BigEndian.PutUint16(hello[1:], uint16(listenerPort))
 	conn.Write(hello)
-	deadline := time.Now().Add(100 * time.Millisecond)
-	err = conn.SetReadDeadline(deadline)
-	if err != nil {
-		end_connection(conn)
-		return
-	}
+	set_deadline(conn)
 	hello_sent = true
 	for {
 		message_type := make([]byte, 1)
 		_, err := conn.Read(message_type)
+		log.Println(message_type)
 		if err != nil || quitting {
 			end_connection(conn)
 			return
 		}
-		deadline = time.Now().Add(100 * time.Millisecond)
-		err = conn.SetReadDeadline(deadline)
-		if err != nil || quitting {
-			end_connection(conn)
-			return
-		} else if message_type[0] == 2 && hello_sent && !welcome_received { //received welcome
+		set_deadline(conn)
+		if message_type[0] == 2 && hello_sent && !welcome_received { //received welcome
 			welcome := make([]byte, 2)
-			n, err := conn.Read(welcome)
-			if err != nil || n != 2 {
-				end_connection(conn)
-				log.Println("corrupted welcome")
-				return
+			bytes_read := 0
+			for bytes_read != 2 {
+				n, err := conn.Read(welcome[bytes_read:])
+				if err != nil {
+					end_connection(conn)
+					log.Println("corrupted welcome")
+					return
+				}
+				set_deadline(conn)
+				bytes_read += n
 			}
+			remove_deadline(conn)
 			num_stations = binary.BigEndian.Uint16(welcome)
 
 			//print prompt for user, wait for input
@@ -84,23 +82,29 @@ func main() {
 			go wait_for_input(conn)
 		} else if message_type[0] == 3 && station_set { //received announce
 			//reading song name length
-			server_response := make([]byte, 1)
-			n, err := conn.Read(server_response)
+			song_name_size := make([]byte, 1)
+			n, err := conn.Read(song_name_size)
 			if err != nil || n != 1 {
 				end_connection(conn)
 				log.Println("corrupted announcement (song name length)")
 				return
 			}
+			set_deadline(conn)
 
 			//reading song name
-			song_name_size := server_response[0]
-			song_name := make([]byte, song_name_size)
-			n, err = conn.Read(song_name)
-			if n != int(song_name_size) || err != nil {
-				end_connection(conn)
-				log.Printf("corrupted announcement: %s", song_name)
-				return
+			song_name := make([]byte, song_name_size[0])
+			bytes_read := 0
+			for bytes_read != int(song_name_size[0]) {
+				n, err := conn.Read(song_name[bytes_read:])
+				if err != nil {
+					end_connection(conn)
+					log.Println("corrupted announce")
+					return
+				}
+				set_deadline(conn)
+				bytes_read += n
 			}
+			remove_deadline(conn)
 			fmt.Println("New song announced: " + string(song_name))
 		} else { //received invalid or unknown message, disconnect in both case
 			end_connection(conn)
@@ -114,7 +118,8 @@ func wait_for_input(conn net.Conn) {
 	for {
 		var input string
 		fmt.Scanln(&input) //user input read
-		if input == "q" {  //user quits
+		log.Println("got a user input")
+		if input == "q" { //user quits
 			end_connection(conn)
 			quitting = true
 			return
@@ -130,6 +135,25 @@ func wait_for_input(conn net.Conn) {
 			conn.Write(set_station)
 			station_set = true
 		}
+	}
+}
+
+func set_deadline(conn net.Conn) {
+	deadline := time.Now().Add(100 * time.Millisecond)
+	err := conn.SetReadDeadline(deadline)
+	if err != nil || quitting {
+		end_connection(conn)
+		quitting = true
+		return
+	}
+}
+
+func remove_deadline(conn net.Conn) {
+	err := conn.SetDeadline(time.Time{})
+	if err != nil {
+		end_connection(conn)
+		quitting = true
+		return
 	}
 }
 
