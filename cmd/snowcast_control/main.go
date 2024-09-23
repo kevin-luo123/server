@@ -7,12 +7,14 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"time"
 )
 
 var station_set bool
 var hello_sent bool
 var welcome_received bool
 var num_stations uint16
+var quitting = false
 
 // handle timeouts
 func main() {
@@ -26,13 +28,13 @@ func main() {
 	serverPort := os.Args[2]
 	listenerPort, err := strconv.Atoi(os.Args[3])
 	if err != nil || listenerPort < 1024 || listenerPort > 65535 {
-		log.Printf("listener port invalid")
+		log.Println("listener port invalid")
 		return
 	}
 	addr := fmt.Sprintf("%s:%s", serverIP, serverPort)
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		log.Printf("failed to connect to server")
+		log.Println("failed to connect to server")
 		return
 	}
 	defer conn.Close()
@@ -47,18 +49,32 @@ func main() {
 	hello[0] = 0
 	binary.BigEndian.PutUint16(hello[1:], uint16(listenerPort))
 	conn.Write(hello)
+	deadline := time.Now().Add(100 * time.Millisecond)
+	err = conn.SetReadDeadline(deadline)
+	if err != nil {
+		end_connection(conn)
+		return
+	}
 	hello_sent = true
 	for {
 		message_type := make([]byte, 1)
 		_, err := conn.Read(message_type)
-		if err != nil {
-			log.Fatal(err)
+		if err != nil || quitting {
+			end_connection(conn)
+			return
+		}
+		deadline = time.Now().Add(100 * time.Millisecond)
+		err = conn.SetReadDeadline(deadline)
+		if err != nil || quitting {
+			end_connection(conn)
+			return
 		} else if message_type[0] == 2 && hello_sent && !welcome_received { //received welcome
 			welcome := make([]byte, 2)
 			n, err := conn.Read(welcome)
 			if err != nil || n != 2 {
 				end_connection(conn)
-				log.Fatal("corrupted welcome")
+				log.Println("corrupted welcome")
+				return
 			}
 			num_stations = binary.BigEndian.Uint16(welcome)
 
@@ -72,7 +88,8 @@ func main() {
 			n, err := conn.Read(server_response)
 			if err != nil || n != 1 {
 				end_connection(conn)
-				log.Fatal("corrupted announcement (song name length)")
+				log.Println("corrupted announcement (song name length)")
+				return
 			}
 
 			//reading song name
@@ -81,12 +98,14 @@ func main() {
 			n, err = conn.Read(song_name)
 			if n != int(song_name_size) || err != nil {
 				end_connection(conn)
-				log.Fatal("corrupted announcement (song name)")
+				log.Printf("corrupted announcement: %s", song_name)
+				return
 			}
-			fmt.Printf("New song announced: " + string(song_name))
+			fmt.Println("New song announced: " + string(song_name))
 		} else { //received invalid or unknown message, disconnect in both case
 			end_connection(conn)
-			log.Fatal("invalid use of protocol")
+			log.Println("invalid use of protocol")
+			return
 		}
 	}
 }
@@ -97,11 +116,12 @@ func wait_for_input(conn net.Conn) {
 		fmt.Scanln(&input) //user input read
 		if input == "q" {  //user quits
 			end_connection(conn)
-			log.Fatal("closing connection")
+			quitting = true
+			return
 		}
 		station, err := strconv.Atoi(input)
 		if err != nil || station < 0 || station >= int(num_stations) { //user entered a non-number of an invalid number
-			fmt.Printf("To quit, enter q. To set station, enter a number from 0 - " + fmt.Sprintf("%d", int(num_stations)-1))
+			log.Println("To quit, enter q. To set station, enter a number from 0 - " + fmt.Sprintf("%d", int(num_stations)-1))
 		} else { //user entered a valid station
 			//sending set station message to server
 			set_station := make([]byte, 3)

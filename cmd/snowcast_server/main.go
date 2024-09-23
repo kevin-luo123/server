@@ -162,7 +162,6 @@ func stream(file *os.File, song_idx uint16) {
 				_, err = num_to_client[client_num].udp_connection.Write(buffer)
 				if err != nil {
 					log.Println("Failed to send data to client number " + strconv.Itoa(client_num))
-					return
 				}
 				if restart {
 					announce(song_idx, client_num)
@@ -178,19 +177,21 @@ func stream(file *os.File, song_idx uint16) {
 func wait_for_connections(list *net.TCPListener) {
 	for {
 		tcp_conn, err := list.AcceptTCP()
-		if quitting {
-		} else if err != nil {
-			log.Println("connection failed to establish", err)
-		} else {
+		if !quitting && err == nil {
 			go handle_Conn(tcp_conn)
 		}
-
 	}
 }
 
 func handle_Conn(conn *net.TCPConn) {
 	defer conn.Close()
 
+	//timeout if we dont get hello
+	deadline := time.Now().Add(100 * time.Millisecond)
+	err := conn.SetReadDeadline(deadline)
+	if err != nil || quitting {
+		return
+	}
 	//client struct instantiated
 	client := &ClientInfo{
 		tcp_connection: conn,
@@ -209,20 +210,34 @@ func handle_Conn(conn *net.TCPConn) {
 	num_to_client_mutex.Unlock()
 
 	for {
-		message := make([]byte, 3)
-		_, err := conn.Read(message)
-		if err != nil || message[0] == 5 { //read failed or client tells server it's quitting
-			log.Printf("client connection closed")
+		part1 := make([]byte, 1)
+		part2 := make([]byte, 2)
+		_, err := conn.Read(part1)
+		message_type := part1[0]
+		if err != nil || message_type == 5 { //read failed or client tells server it's quitting
+			log.Println("client connection closed")
 			clean(client_num)
 			return
 		}
-		if message[0] == 0 { //hello
+		deadline = time.Now().Add(100 * time.Millisecond)
+		err = conn.SetReadDeadline(deadline)
+		if err != nil || quitting {
+			clean(client_num)
+			return
+		}
+		if message_type == 0 { //hello
 			if client.udp_port != 0 { //multiple hellos sent
 				invalid_command(1, conn)
 				clean(client_num)
 				return
 			}
-			client.udp_port = binary.BigEndian.Uint16(message[1:])
+			n, err := conn.Read(part2)
+			if err != nil || n != 2 {
+				log.Println("hello failed")
+				clean(client_num)
+				return
+			}
+			client.udp_port = binary.BigEndian.Uint16(part2)
 			//set up udp connection
 			remote_addr := conn.RemoteAddr().String()
 			ip := strings.Split(remote_addr, ":")[0]
@@ -247,8 +262,14 @@ func handle_Conn(conn *net.TCPConn) {
 			welcome[0] = 2
 			binary.BigEndian.PutUint16(welcome[1:], station_count)
 			conn.Write(welcome)
-		} else if message[0] == 1 { //set station
-			station_number := binary.BigEndian.Uint16(message[1:])
+		} else if message_type == 1 { //set station
+			n, err := conn.Read(part2)
+			if err != nil || n != 2 {
+				log.Println("set station failed")
+				clean(client_num)
+				return
+			}
+			station_number := binary.BigEndian.Uint16(part2)
 			if client.udp_port == 0 || client.udp_connection == nil {
 				invalid_command(2, conn)
 				clean(client_num)
