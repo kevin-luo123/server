@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,11 +73,14 @@ func main() {
 	}
 
 	//respond to user input
+	reader := bufio.NewReader(os.Stdin)
 	for {
-		var input string
-		fmt.Scanln(&input)
-		re := regexp.MustCompile(`^p\s+(.+)$`)
-		matches := re.FindStringSubmatch(input)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			log.Printf("error reading input")
+			continue
+		}
+		input = strings.TrimSpace(input)
 		if input == "q" { //quit
 			for _, client_info := range num_to_client {
 				quitting = true
@@ -98,8 +100,9 @@ func main() {
 				fmt.Println(strconv.Itoa(id) + "," + stations[id] + list)
 			}
 			station_to_nums_mutex.Unlock()
-		} else if len(matches) > 1 { //write station info to file
-			file, err := os.Create(matches[1])
+		} else if strings.HasPrefix(input, "p ") { //write station info to file
+			file_name := strings.SplitN(input, " ", 2)[1]
+			file, err := os.Create(file_name)
 			if err != nil {
 				log.Printf("invalid file")
 			} else {
@@ -175,14 +178,13 @@ func stream(file *os.File, song_idx uint16) {
 func wait_for_connections(list *net.TCPListener) {
 	for {
 		tcp_conn, err := list.AcceptTCP()
-		if err != nil {
-			if quitting {
-				return
-			}
+		if quitting {
+		} else if err != nil {
 			log.Println("connection failed to establish", err)
-			continue
+		} else {
+			go handle_Conn(tcp_conn)
 		}
-		go handle_Conn(tcp_conn)
+
 	}
 }
 
