@@ -9,7 +9,6 @@ import (
 	"strconv"
 )
 
-var conn net.TCPConn
 var station_set bool
 var hello_sent bool
 var welcome_received bool
@@ -31,7 +30,7 @@ func main() {
 		return
 	}
 	addr := fmt.Sprintf("%s:%s", serverIP, serverPort)
-	conn, err := net.Dial("tcp4", addr)
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		log.Printf("failed to connect to server")
 		return
@@ -43,18 +42,12 @@ func main() {
 	hello_sent = false
 	welcome_received = false
 
-	//wait for server messages
-	go wait_for_server()
-
 	//start handshake, send hello to server
 	hello := make([]byte, 3)
 	hello[0] = 0
 	binary.BigEndian.PutUint16(hello[1:], uint16(listenerPort))
 	conn.Write(hello)
 	hello_sent = true
-}
-
-func wait_for_server() {
 	for {
 		message_type := make([]byte, 1)
 		_, err := conn.Read(message_type)
@@ -64,7 +57,7 @@ func wait_for_server() {
 			welcome := make([]byte, 2)
 			n, err := conn.Read(welcome)
 			if err != nil || n != 2 {
-				end_connection()
+				end_connection(conn)
 				log.Fatal("corrupted welcome")
 			}
 			num_stations = binary.BigEndian.Uint16(welcome)
@@ -72,13 +65,13 @@ func wait_for_server() {
 			//print prompt for user, wait for input
 			fmt.Println("Welcome to Snowcast! The server has " + fmt.Sprintf("%d", num_stations) + " stations")
 			welcome_received = true
-			go wait_for_input()
+			go wait_for_input(conn)
 		} else if message_type[0] == 3 && station_set { //received announce
 			//reading song name length
 			server_response := make([]byte, 1)
 			n, err := conn.Read(server_response)
 			if err != nil || n != 1 {
-				end_connection()
+				end_connection(conn)
 				log.Fatal("corrupted announcement (song name length)")
 			}
 
@@ -87,23 +80,23 @@ func wait_for_server() {
 			song_name := make([]byte, song_name_size)
 			n, err = conn.Read(song_name)
 			if n != int(song_name_size) || err != nil {
-				end_connection()
+				end_connection(conn)
 				log.Fatal("corrupted announcement (song name)")
 			}
-			fmt.Printf("New song announced: " + fmt.Sprintf("%d", song_name))
+			fmt.Printf("New song announced: " + string(song_name))
 		} else { //received invalid or unknown message, disconnect in both case
-			end_connection()
+			end_connection(conn)
 			log.Fatal("invalid use of protocol")
 		}
 	}
 }
 
-func wait_for_input() {
+func wait_for_input(conn net.Conn) {
 	for {
 		var input string
 		fmt.Scanln(&input) //user input read
 		if input == "q" {  //user quits
-			end_connection()
+			end_connection(conn)
 			log.Fatal("closing connection")
 		}
 		station, err := strconv.Atoi(input)
@@ -120,7 +113,7 @@ func wait_for_input() {
 	}
 }
 
-func end_connection() {
+func end_connection(conn net.Conn) {
 	quit := make([]byte, 1)
 	quit[0] = 5
 	conn.Write(quit)

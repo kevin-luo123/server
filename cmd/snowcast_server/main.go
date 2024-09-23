@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-var num_to_client map[int]ClientInfo
+var num_to_client map[int]*ClientInfo
 var station_to_nums map[uint16]map[int]struct{}
 var next_client_num int
 var station_count uint16
@@ -24,11 +24,12 @@ var stations []string
 var num_to_client_mutex sync.Mutex
 var station_to_nums_mutex sync.Mutex
 var client_count_mutex sync.Mutex
+var quitting = false
 
 const chunk_size = 160 //160 bytes, sent 100 times a second, 16 kB/s
 
 type ClientInfo struct {
-	connection     *net.TCPConn
+	tcp_connection *net.TCPConn
 	udp_connection *net.UDPConn
 	udp_port       uint16
 	station        uint16
@@ -43,7 +44,7 @@ func main() {
 	//process arguments, set up connection
 	stations = os.Args[2:]
 	station_count = uint16(len(stations))
-	port := fmt.Sprintf(":%s", os.Args[1])
+	port := fmt.Sprintf("localhost:%s", os.Args[1])
 	addr, err := net.ResolveTCPAddr("tcp4", port)
 	if err != nil {
 		log.Printf("could nto resolve tcp address")
@@ -56,6 +57,8 @@ func main() {
 	}
 	defer list.Close()
 
+	num_to_client = make(map[int]*ClientInfo)
+	station_to_nums = make(map[uint16]map[int]struct{})
 	next_client_num = 0
 	go wait_for_connections(list)
 
@@ -78,10 +81,11 @@ func main() {
 		matches := re.FindStringSubmatch(input)
 		if input == "q" { //quit
 			for _, client_info := range num_to_client {
+				quitting = true
 				message := make([]byte, 1)
 				message[0] = 9 //random number, make client quit
-				client_info.connection.Write(message)
-				client_info.connection.Close()
+				client_info.tcp_connection.Write(message)
+				client_info.tcp_connection.Close()
 			}
 			return
 		} else if input == "p" {
@@ -172,6 +176,9 @@ func wait_for_connections(list *net.TCPListener) {
 	for {
 		tcp_conn, err := list.AcceptTCP()
 		if err != nil {
+			if quitting {
+				return
+			}
 			log.Println("connection failed to establish", err)
 			continue
 		}
@@ -183,11 +190,11 @@ func handle_Conn(conn *net.TCPConn) {
 	defer conn.Close()
 
 	//client struct instantiated
-	client := ClientInfo{
-		connection:     conn,
+	client := &ClientInfo{
+		tcp_connection: conn,
+		udp_connection: nil,
 		udp_port:       0,
 		station:        station_count,
-		udp_connection: nil,
 	}
 
 	//setting up client num and mapping from num to struct
@@ -212,37 +219,35 @@ func handle_Conn(conn *net.TCPConn) {
 				invalid_command(1, conn)
 				clean(client_num)
 				return
-			} else { //respond with welcome message
-				client.udp_port = binary.BigEndian.Uint16(message[1:])
-
-				//set up udp connection
-				remote_addr := conn.RemoteAddr().String()
-				ip := strings.Split(remote_addr, ":")[0]
-				udp_addr := fmt.Sprintf("%s:%d", ip, client.udp_port)
-				addr, err := net.ResolveUDPAddr("udp", udp_addr)
-				if err != nil {
-					invalid_command(4, conn)
-					clean(client_num)
-					return
-				}
-				udp_conn, err := net.DialUDP("udp", nil, addr)
-				if err != nil {
-					invalid_command(4, conn)
-					clean(client_num)
-					return
-				}
-				defer udp_conn.Close()
-				client.udp_connection = udp_conn
-
-				//send welcome message
-				welcome := make([]byte, 3)
-				welcome[0] = 2
-				binary.BigEndian.PutUint16(welcome[1:], station_count)
-				conn.Write(welcome)
 			}
+			client.udp_port = binary.BigEndian.Uint16(message[1:])
+			//set up udp connection
+			remote_addr := conn.RemoteAddr().String()
+			ip := strings.Split(remote_addr, ":")[0]
+			udp_addr := fmt.Sprintf("%s:%d", ip, client.udp_port)
+			addr, err := net.ResolveUDPAddr("udp", udp_addr)
+			if err != nil {
+				invalid_command(4, conn)
+				clean(client_num)
+				return
+			}
+			udp_conn, err := net.DialUDP("udp", nil, addr)
+			if err != nil {
+				invalid_command(4, conn)
+				clean(client_num)
+				return
+			}
+			defer udp_conn.Close()
+			client.udp_connection = udp_conn
+
+			//send welcome message
+			welcome := make([]byte, 3)
+			welcome[0] = 2
+			binary.BigEndian.PutUint16(welcome[1:], station_count)
+			conn.Write(welcome)
 		} else if message[0] == 1 { //set station
 			station_number := binary.BigEndian.Uint16(message[1:])
-			if client.udp_port == 0 {
+			if client.udp_port == 0 || client.udp_connection == nil {
 				invalid_command(2, conn)
 				clean(client_num)
 				return
@@ -270,6 +275,9 @@ func announce(station_number uint16, client_num int) {
 		if client.station != station_number { //need to get off old station
 			delete(station_to_nums[client.station], client_num)
 		}
+		if _, exists := station_to_nums[station_number]; !exists {
+			station_to_nums[station_number] = make(map[int]struct{})
+		}
 		station_to_nums[station_number][client_num] = struct{}{}
 		station_to_nums_mutex.Unlock()
 	}
@@ -278,7 +286,7 @@ func announce(station_number uint16, client_num int) {
 	announce[1] = uint8(len(stations[station_number]))
 	copy(announce[2:], stations[station_number])
 	client.station = station_number
-	client.connection.Write(announce)
+	client.tcp_connection.Write(announce)
 }
 
 func invalid_command(x int, conn *net.TCPConn) {

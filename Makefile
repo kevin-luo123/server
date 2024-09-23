@@ -23,7 +23,7 @@ $(SERVER_BIN): $(SERVER_SRC)
 
 # Rule to build the listener executable
 $(LISTENER_BIN): $(LISTENER_SRC)
-	$(GO) build -o $@ $(SERVER_SRC)
+	$(GO) build -o $@ $(LISTENER_SRC)
 
 # Clean up build artifacts
 clean:
