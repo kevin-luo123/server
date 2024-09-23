@@ -54,7 +54,6 @@ func main() {
 	for {
 		message_type := make([]byte, 1)
 		_, err := conn.Read(message_type)
-		log.Println(message_type)
 		if err != nil || quitting {
 			end_connection(conn)
 			return
