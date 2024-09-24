@@ -14,7 +14,6 @@ var station_set bool
 var hello_sent bool
 var welcome_received bool
 var num_stations uint16
-var quitting = false
 
 // handle timeouts
 func main() {
@@ -54,7 +53,7 @@ func main() {
 	for {
 		message_type := make([]byte, 1)
 		_, err := conn.Read(message_type)
-		if err != nil || quitting {
+		if err != nil {
 			end_connection(conn)
 			return
 		}
@@ -117,11 +116,9 @@ func wait_for_input(conn net.Conn) {
 	for {
 		var input string
 		fmt.Scanln(&input) //user input read
-		log.Println("got a user input")
-		if input == "q" { //user quits
+		if input == "q" {  //user quits
 			end_connection(conn)
-			quitting = true
-			return
+			os.Exit(0)
 		}
 		station, err := strconv.Atoi(input)
 		if err != nil || station < 0 || station >= int(num_stations) { //user entered a non-number of an invalid number
@@ -140,10 +137,9 @@ func wait_for_input(conn net.Conn) {
 func set_deadline(conn net.Conn) {
 	deadline := time.Now().Add(100 * time.Millisecond)
 	err := conn.SetReadDeadline(deadline)
-	if err != nil || quitting {
+	if err != nil {
 		end_connection(conn)
-		quitting = true
-		return
+		os.Exit(0)
 	}
 }
 
@@ -151,8 +147,7 @@ func remove_deadline(conn net.Conn) {
 	err := conn.SetDeadline(time.Time{})
 	if err != nil {
 		end_connection(conn)
-		quitting = true
-		return
+		os.Exit(0)
 	}
 }
 
